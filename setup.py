@@ -13,6 +13,7 @@ setup(
         'sentence_transformers',
         'tabulate',
         'flash_attn==2.7.3',
+        'timeout_decorator'
     ],
     classifiers=[
         'Programming Language :: Python :: 3',
