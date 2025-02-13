@@ -21,7 +21,7 @@ def keep(rank):
         b = torch.rand((8192 * n, 8192)).cuda()
 
         tic = time.time()
-        for _ in range(500000):
+        for _ in range(50000000):
             c = a * b
         toc = time.time()
         print('benchmark 500K matmul: time span: {}ms'.format((toc - tic) * 1000 / 5000))
