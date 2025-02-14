@@ -178,7 +178,7 @@ def _compute_response_info(batch):
     )
 
 
-def compute_data_metrics(batch, use_critic=True):
+def compute_data_metrics(batch, use_critic=True, tokenizer=None):
     # TODO: add response length
     sequence_score = batch.batch['token_level_scores'].sum(-1)
     sequence_reward = batch.batch['token_level_rewards'].sum(-1)
@@ -206,6 +206,28 @@ def compute_data_metrics(batch, use_critic=True):
         return_diff_var = torch.var(valid_returns - valid_values)
         return_var = torch.var(valid_returns)
 
+    if tokenizer:
+        try:
+            # 假设 sample_idx 是一个列表或 1D 的 torch.Tensor
+            sample_idx = batch.batch['responses'][0]
+
+            # 如果是 tensor，则转换为列表
+            if hasattr(sample_idx, "tolist"):
+                sample_idx = sample_idx.tolist()
+
+            # 从序列末尾开始检查连续的 pad token（注意只删除末尾连续的 pad token）
+            last_non_pad_idx = len(sample_idx)
+            while last_non_pad_idx > 0 and sample_idx[last_non_pad_idx - 1] == tokenizer.pad_token_id:
+                last_non_pad_idx -= 1
+
+            trimmed_sample_idx = sample_idx[:last_non_pad_idx]
+
+            # 解码时可以选择是否跳过 special tokens
+            sample = tokenizer.decode(trimmed_sample_idx, skip_special_tokens=False)
+            print(sample)
+        except:
+            print("测试")
+        print("测试结束")
     metrics = {
         # score
         'critic/score/mean':
@@ -738,7 +760,7 @@ class RayPPOTrainer(object):
                             self._save_checkpoint()
 
                 # collect metrics
-                metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
+                metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic, tokenizer=self.tokenizer))
                 metrics.update(compute_timing_metrics(batch=batch, timing_raw=timing_raw))
 
                 # TODO: make a canonical logger that supports various backend
