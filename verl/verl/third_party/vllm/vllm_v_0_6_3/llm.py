@@ -164,7 +164,8 @@ class LLM(LLM):
 
     def _run_engine(self, *, use_tqdm: bool) -> List[Union[RequestOutput, EmbeddingRequestOutput]]:
         outputs = super()._run_engine(use_tqdm=use_tqdm)
-        return self._post_process_outputs(outputs)
+        return outputs
+        #return self._post_process_outputs(outputs)
 
     # # NOTE(shengguangming): add for verl
     # # TODO(sgm): we can optimize it by making the dataloader yield List[int] without padding.

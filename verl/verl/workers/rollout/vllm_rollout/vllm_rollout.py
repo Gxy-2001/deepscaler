@@ -32,6 +32,7 @@ import torch.distributed
 from tensordict import TensorDict
 import traceback
 from torch import nn
+from torch.nn.utils.rnn import pad_sequence
 
 from verl import DataProto
 from verl.utils.torch_functional import get_eos_mask, pad_sequence_to_length
@@ -146,6 +147,28 @@ class vLLMRollout(BaseRollout):
         for key, value in old_sampling_params_args.items():
             setattr(self.sampling_params, key, value)
 
+    def _post_process_outputs(self, request_outputs):
+        output_token_ids = []
+        logprobs = []
+        for request_output in request_outputs:  # List[RequestOutput]
+            outputs = request_output.outputs
+            for output in outputs:  # List[CompletionOutput], usually len == 1
+                output_token_ids.append(torch.tensor(output.token_ids))
+
+                logprobs_dicts = output.logprobs
+                if logprobs_dicts is not None:
+                    logprob = []
+                    for logprobs_dict, id in zip(logprobs_dicts, output.token_ids):
+                        logprob.append(logprobs_dict[id].logprob)
+                    logprobs.append(torch.tensor(logprob))
+
+        pad_token_id = (self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None
+                        else self.tokenizer.eos_token_id)
+        output_token_ids = pad_sequence(output_token_ids, batch_first=True, padding_value=pad_token_id)
+        if len(logprobs) > 0:
+            logprobs = pad_sequence(logprobs, batch_first=True, padding_value=pad_token_id)
+        return output_token_ids, logprobs
+
     @torch.no_grad()
     def generate_sequences(self, prompts: DataProto, max_retries: int = 1e9, **kwargs) -> DataProto:
         """Generate sequences using vLLM engine with retry logic for failures.
@@ -202,12 +225,63 @@ class vLLMRollout(BaseRollout):
                     kwargs['temperature'] = prompts.meta_info['val_temperature']
                 # Generate sequences
                 with self.update_sampling_params(**kwargs):
-                    output = self.inference_engine.generate(
-                        prompts=None,
-                        sampling_params=self.sampling_params,
-                        prompt_token_ids=idx_list,
-                        use_tqdm=False)
+                    print("-" * 20)
+                    print(self.sampling_params)
+                    max_func_call = 6
+                    n = self.sampling_params.n
+                    idx_list_with_id = []
+                    i = 0
+                    for idx_ in idx_list:
+                        for _ in range(n):
+                            idx_list_with_id.append((i, idx_, None))
+                            i += 1
+                    call_sampling_params = self.sampling_params
+                    call_sampling_params.n = 1
+                    
+                    end_outs = []
+                    for epoch in range(max_func_call):
+                        current_idxs = idx_list_with_id
+                        if len(current_idxs) == 0:
+                            break
 
+                        prompt_ids = [item[1] for item in current_idxs]
+                        output = self.inference_engine.generate(
+                            prompts=None,
+                            sampling_params=call_sampling_params,
+                            prompt_token_ids=prompt_ids,
+                            use_tqdm=False)
+                        
+                        idx_list_with_id = []
+                        for (i, idx_list, _), out in zip(current_idxs, output):
+                            if out.outputs[0].stop_reason and out.outputs[0].stop_reason == "</code>":
+                                all_idx = idx_list + out.outputs[0].token_ids + self.tokenizer.encode("</code>")
+                                idx_list_with_id.append((i, all_idx, out))
+                            else:
+                                end_outs.append((i, [], out))
+                        
+                        # remain_res = batch_apply(idx_list_with_id, self.tokenizer)
+                        remain_res = []
+                        idx_list_with_id = []
+                        for k in range(len(idx_list_with_id)):
+                            i, idx_, out = idx_list_with_id[k]
+                            res = remain_res[k]
+                            idx_ = idx_ + self.tokenizer.encode(res)
+                            if epoch == max_func_call - 1:
+                                idx_ += self.tokenizer.encode("\nReach max function call limit.")
+                            idx_list_with_id[k] = (i, idx_, out)
+
+                    end_outs.extend(idx_list_with_id)
+
+                    def takeFirst(elem):
+                        return elem[0]
+                    end_outs.sort(key=takeFirst)
+
+                    outputs = []
+                    for item in end_outs:
+                        outputs.append(item[2])
+                    output = self._post_process_outputs(outputs)
+     
+    
                 # Process outputs
                 response = output[0].to(idx.device)
                 log_probs = output[1].to(idx.device)

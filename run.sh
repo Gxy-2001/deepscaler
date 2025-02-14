@@ -1,8 +1,8 @@
 
-# conda create -n deepscaler -y python=3.10
+# conda create -n deepscaler1 -y python=3.10
 # conda init 
 # source deactivate
-# conda activate deepscaler
+# conda activate deepscaler1
 
 
 # python scripts/data/deepscaler_dataset.py
@@ -23,7 +23,7 @@
 # # 8k context 8 A100-80G
 # export VLLM_ATTENTION_BACKEND=XFORMERS
 # Run 8K context length training
-export MODEL_PATH="/mnt/lyna-selfplay/model/DeepSeek-R1-Distill-Qwen-1.5B"
-# bash scripts/train/run_deepscaler_1.5b_8k.sh --model $MODEL_PATH
-CUDA_LAUNCH_BLOCKING=1 VLLM_ATTENTION_BACKEND=XFORMERS bash scripts/train/run_deepscaler_1.5b_8k_4node.sh --model $MODEL_PATH
+export MODEL_PATH="/mnt/teamdrive/model/DeepSeek-R1-Distill-Qwen-1.5B"
+bash scripts/train/run_deepscaler_1.5b_8k.sh --model $MODEL_PATH
+# CUDA_LAUNCH_BLOCKING=1 VLLM_ATTENTION_BACKEND=XFORMERS bash scripts/train/run_deepscaler_1.5b_8k_4node.sh --model $MODEL_PATH
 python keepgpu.py
