@@ -36,6 +36,7 @@ from torch.nn.utils.rnn import pad_sequence
 
 from verl import DataProto
 from verl.utils.torch_functional import get_eos_mask, pad_sequence_to_length
+from verl.utils.python_tool import batch_apply
 from verl.workers.rollout.base import BaseRollout
 from verl.third_party.vllm import LLM, vllm_version
 from verl.third_party.vllm import parallel_state as vllm_ps
@@ -259,7 +260,7 @@ class vLLMRollout(BaseRollout):
                             else:
                                 end_outs.append((i, [], out))
                         
-                        # remain_res = batch_apply(idx_list_with_id, self.tokenizer)
+                        remain_res = batch_apply([item[1] for item in idx_list_with_id], self.tokenizer)
                         remain_res = []
                         idx_list_with_id = []
                         for k in range(len(idx_list_with_id)):

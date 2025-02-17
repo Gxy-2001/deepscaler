@@ -238,7 +238,9 @@ def code_execution(
     
     return observation
 
-def batch_apply(codes):
+def batch_apply(codes, tokenizer):
+    codes = [tokenizer.decode(ids) for ids in codes]
+    
     outputs = []
     with ProcessPool(max_workers=os.cpu_count() - 8) as pool:
     #with ProcessPool(max_workers=1) as pool:
