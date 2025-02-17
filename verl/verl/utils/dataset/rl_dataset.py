@@ -106,8 +106,12 @@ class RLHFDataset(Dataset):
         # filter out too long prompts
         tokenizer = self.tokenizer
         prompt_key = self.prompt_key
+        # self.dataframe = self.dataframe[self.dataframe.apply(lambda doc: len(
+        #     tokenizer.apply_chat_template(doc[prompt_key], add_generation_prompt=True)) <= self.max_prompt_length,
+        #                                                      axis=1)]
+        
         self.dataframe = self.dataframe[self.dataframe.apply(lambda doc: len(
-            tokenizer.apply_chat_template(doc[prompt_key], add_generation_prompt=True)) <= self.max_prompt_length,
+            list(self.tokenizer.encode(self._rstar_prompt(doc[prompt_key][0]['content'])))) <= self.max_prompt_length,
                                                              axis=1)]
 
         print(f'filter dataset len: {len(self.dataframe)}')
@@ -123,7 +127,8 @@ class RLHFDataset(Dataset):
 
         chat = row_dict.pop(self.prompt_key)
 
-        prompt_with_chat_template = self.tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=False)
+        #prompt_with_chat_template = self.tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=False)
+        prompt_with_chat_template = self._rstar_prompt(chat[0]['content'])
 
         input_ids, attention_mask = verl_F.tokenize_and_postprocess_data(prompt=prompt_with_chat_template,
                                                                          tokenizer=self.tokenizer,
@@ -147,3 +152,6 @@ class RLHFDataset(Dataset):
         row_dict["index"] = index
 
         return row_dict
+
+    def _rstar_prompt(self, s):
+        return "<|user|>:\n" + s + "\n<|assistant|>: Let's think step by step and solve the problem with code."

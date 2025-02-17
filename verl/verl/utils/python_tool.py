@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from timeout_decorator import timeout
 
 
-TIMEOUT_SECONDS = 3
+TIMEOUT_SECONDS = 10
 TIMEOUT_MESSAGE = f"Execution of the code snippet has timed out for exceeding {TIMEOUT_SECONDS} seconds."
 
 def truncate_string(text, max_length=4096, is_evalf=True):
@@ -192,19 +192,33 @@ def extract_program(result: str, last_only=False):
         program = result
     return program.strip()
 
+def extract_program(result: str, last_only=False):
+    program = ""
+    start = False
+    result = result.replace("<end_of_step>", "")
+    for line in result.split("\n"):
+        if line.find("<code>") != -1:
+            if last_only:
+                program = "" # only extract the last program
+            else:
+                program += "\n# ========\n"
+            start = True
+        elif line.find("<end_of_code>") != -1:
+            start = False
+        elif start:
+            program += line + "\n"
+    # maybe all output is a program
+    if not program:
+        program = result
+    return program.strip()
 
 def extract_code_segments(s: str) -> list:
-    """
-    从字符串中提取所有被 <code> 和 </code> 包含的子字符串
-
-    参数:
-        s (str): 输入的字符串
-
-    返回:
-        list: 被 <code> 和 </code> 包含的所有子字符串列表
-    """
-    # 使用非贪婪模式匹配 <code> 和 </code> 中间的内容
-    return re.findall(r"<code>(.*?)</code>", s)
+    s = s.replace("<end_of_step>", "")
+    pattern = re.compile(r"<code>(.*?)<end_of_code>", re.DOTALL | re.IGNORECASE)
+    # 查找所有匹配项
+    code_blocks = pattern.findall(s)
+    # 去除每个代码块两端的空白，并过滤掉空字符串
+    return [block.strip() for block in code_blocks if block.strip()]
 
 tool = PythonInterpreter(globals=globals(), locals=None)
 
@@ -222,11 +236,14 @@ def code_execution(
         # Define tool
         tool_func = tool_wrapper(tool)
         # print(code)
-        history_action_inputs = extract_code_segments(code)
-        # print(history_action_inputs)
-        observation = ""
-        for history_ai in history_action_inputs:
-            observation = tool_func(history_ai).strip()
+        
+        # history_action_inputs = extract_code_segments(code)
+        # # print(history_action_inputs)
+        # observation = ""
+        # for history_ai in history_action_inputs:
+        #     observation = tool_func(history_ai).strip()
+        
+        observation = tool_func(extract_program(code))
         
         del tool_func
         return observation
@@ -239,11 +256,14 @@ def code_execution(
     return observation
 
 def batch_apply(codes, tokenizer):
+    if not codes: return []
     codes = [tokenizer.decode(ids) for ids in codes]
     
     outputs = []
-    with ProcessPool(max_workers=os.cpu_count() - 8) as pool:
-    #with ProcessPool(max_workers=1) as pool:
+    # with ProcessPool(max_workers=os.cpu_count() - 8) as pool:
+    # print("执行batch_apply")
+    # print(codes)
+    with ProcessPool(max_workers=1) as pool:
         executor = partial(
             code_execution
         )
@@ -259,7 +279,9 @@ def batch_apply(codes, tokenizer):
             except Exception as error:
                 outputs.append("An error occurred, no output result.") 
                 print("process error",error)
-    outputs = [output + "</output>" for output in outputs]
+    outputs = ["<output>" + output + "<end_of_output>" for output in outputs]
+    # print("执行batch_apply 完成 看看outputs")
+    # print(outputs)
     return outputs
 
 def parse_args():
@@ -277,7 +299,12 @@ if __name__ == "__main__":
 
     # print(code_execution("123<code>print('code1')</code>3456<code>print('code2')</code>"))
 
-    print(batch_apply([
-        "123<code>print('code1')</code>3456<code>print('code2')</code>",
-        "123<code>print('code1')</code>3456<code>print('code1')</code>"
-    ]))
+    # print(batch_apply([
+    #     "123<code>print('code1')</code>3456<code>print('code2')</code>",
+    #     "123<code>print('code1')</code>3456<code>print('code1')</code>"
+    # ]))
+    
+    code = "<|user|>:\nPositive real numbers $x$ and $y$ satisfy $y^3=x^2$ and $(y-x)^2=4y^2$. What is $x+y$?\n<|assistant|>: Let's think step by step and solve the problem with code.<code>\nfrom sympy import symbols, Eq, solve\n\n# Define the variables x and y\nx, y = symbols('x y')\n<end_of_step>\n\n# Define the equations\neq1 = Eq(y**3, x**2)\neq2 = Eq((y - x)**2, 4*y**2)\n<end_of_step>\n\n# Solve the system of equations\nsolutions = solve((eq1, eq2), (x, y))\n<end_of_step>\n\n# Filter out the positive real solutions\npositive_solutions = [(x_val, y_val) for x_val, y_val in solutions if x_val > 0 and y_val > 0]\n<end_of_step>\n\n# Extract the values of x and y from the positive solution\nx_val, y_val = positive_solutions[0]\n<end_of_step>\n\n# Calculate x + y\nresult = x_val + y_val\n<end_of_step>\n\n# Now print the final answer\nprint(result)\n<end_of_code>"
+    # print(extract_code_segments(code))
+    print(extract_program(code))
+    print(code_execution(code))

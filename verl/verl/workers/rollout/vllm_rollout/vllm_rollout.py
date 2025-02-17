@@ -27,6 +27,7 @@ When working with Megatron:
 from typing import List
 from contextlib import contextmanager
 from omegaconf import DictConfig
+from copy import deepcopy
 import torch
 import torch.distributed
 from tensordict import TensorDict
@@ -148,27 +149,6 @@ class vLLMRollout(BaseRollout):
         for key, value in old_sampling_params_args.items():
             setattr(self.sampling_params, key, value)
 
-    def _post_process_outputs(self, request_outputs):
-        output_token_ids = []
-        logprobs = []
-        for request_output in request_outputs:  # List[RequestOutput]
-            outputs = request_output.outputs
-            for output in outputs:  # List[CompletionOutput], usually len == 1
-                output_token_ids.append(torch.tensor(output.token_ids))
-
-                logprobs_dicts = output.logprobs
-                if logprobs_dicts is not None:
-                    logprob = []
-                    for logprobs_dict, id in zip(logprobs_dicts, output.token_ids):
-                        logprob.append(logprobs_dict[id].logprob)
-                    logprobs.append(torch.tensor(logprob))
-
-        pad_token_id = (self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None
-                        else self.tokenizer.eos_token_id)
-        output_token_ids = pad_sequence(output_token_ids, batch_first=True, padding_value=pad_token_id)
-        if len(logprobs) > 0:
-            logprobs = pad_sequence(logprobs, batch_first=True, padding_value=pad_token_id)
-        return output_token_ids, logprobs
 
     @torch.no_grad()
     def generate_sequences(self, prompts: DataProto, max_retries: int = 1e9, **kwargs) -> DataProto:
@@ -228,7 +208,7 @@ class vLLMRollout(BaseRollout):
                 with self.update_sampling_params(**kwargs):
                     print("-" * 20)
                     print(self.sampling_params)
-                    max_func_call = 6
+                    max_func_call = 2
                     n = self.sampling_params.n
                     idx_list_with_id = []
                     i = 0
@@ -236,8 +216,12 @@ class vLLMRollout(BaseRollout):
                         for _ in range(n):
                             idx_list_with_id.append((i, idx_, None))
                             i += 1
-                    call_sampling_params = self.sampling_params
+                    call_sampling_params = deepcopy(self.sampling_params)
                     call_sampling_params.n = 1
+                    call_sampling_params.skip_special_tokens = False
+                    #call_sampling_params.stop = ["<end_of_code>", "<end_of_answer>"]
+                    call_sampling_params.stop_token_ids = [151667, 151671]
+                    # call_sampling_params.logprobs = None
                     
                     end_outs = []
                     for epoch in range(max_func_call):
@@ -251,48 +235,73 @@ class vLLMRollout(BaseRollout):
                             sampling_params=call_sampling_params,
                             prompt_token_ids=prompt_ids,
                             use_tqdm=False)
-                        
+                        # print("这个output 到底是什么")
+                        # print(output[0])
                         idx_list_with_id = []
                         for (i, idx_list, _), out in zip(current_idxs, output):
-                            if out.outputs[0].stop_reason and out.outputs[0].stop_reason == "</code>":
-                                all_idx = idx_list + out.outputs[0].token_ids + self.tokenizer.encode("</code>")
+                            if out.outputs[0].stop_reason and out.outputs[0].stop_reason == 151667:
+                                all_idx = idx_list + list(out.outputs[0].token_ids)
                                 idx_list_with_id.append((i, all_idx, out))
                             else:
                                 end_outs.append((i, [], out))
                         
                         remain_res = batch_apply([item[1] for item in idx_list_with_id], self.tokenizer)
-                        remain_res = []
-                        idx_list_with_id = []
+                        #remain_res = []
+                        idx_list_with_id_new = deepcopy(idx_list_with_id)
                         for k in range(len(idx_list_with_id)):
                             i, idx_, out = idx_list_with_id[k]
                             res = remain_res[k]
                             idx_ = idx_ + self.tokenizer.encode(res)
-                            if epoch == max_func_call - 1:
-                                idx_ += self.tokenizer.encode("\nReach max function call limit.")
-                            idx_list_with_id[k] = (i, idx_, out)
-
+                            # if epoch == max_func_call - 1:
+                            #     idx_ += self.tokenizer.encode("\nReach max function call limit.")
+                            idx_list_with_id_new[k] = (i, idx_, out)
+                        idx_list_with_id = idx_list_with_id_new
+                        
                     end_outs.extend(idx_list_with_id)
 
                     def takeFirst(elem):
                         return elem[0]
                     end_outs.sort(key=takeFirst)
 
-                    outputs = []
-                    for item in end_outs:
-                        outputs.append(item[2])
-                    output = self._post_process_outputs(outputs)
-     
+
+                    output_token_ids = []
+                    for request_output in end_outs:  # List[RequestOutput]
+                        prompt_token_ids = request_output[2].prompt_token_ids
+                        res_token_ids = request_output[2].outputs[0].token_ids
+                        prompt_end_text = "\n<|assistant|>: Let's think step by step and solve the problem with code."
+                        # 使用 self.tokenizer 将提示文本转换为 token id 序列（不添加特殊 tokens）
+                        prompt_end_ids = self.tokenizer.encode(prompt_end_text, add_special_tokens=False)
+
+                        # 在 token_ids 列表中查找 prompt_end_ids 所在的位置
+                        token_ids = list(prompt_token_ids) + list(res_token_ids)
+                        start_index = 0
+                        for i in range(len(token_ids) - len(prompt_end_ids) + 1):
+                            # 如果从 i 开始的子列表与 prompt_end_ids 相同，则找到了提示结束的标识位置
+                            if token_ids[i:i + len(prompt_end_ids)] == prompt_end_ids:
+                                # 响应部分的起始位置为该位置后一个 token
+                                start_index = i + len(prompt_end_ids)
+                                break
+
+                        # 截取响应部分的 token ids
+                        resp_ids = token_ids[start_index:]
+                        output_token_ids.append(torch.tensor(resp_ids))
+                
+                    
+                    pad_token_id = (self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None
+                                    else self.tokenizer.eos_token_id)
+                    
+                    output_token_ids = pad_sequence(output_token_ids, batch_first=True, padding_value=pad_token_id)
     
                 # Process outputs
-                response = output[0].to(idx.device)
-                log_probs = output[1].to(idx.device)
+                response = output_token_ids.to(idx.device)
+                # log_probs = output[1].to(idx.device)
 
                 # Pad sequences if needed
                 if response.shape[1] < self.config.response_length:
                     response = pad_sequence_to_length(
                         response, self.config.response_length, self.pad_token_id)
-                    log_probs = pad_sequence_to_length(
-                        log_probs, self.config.response_length, self.pad_token_id)
+                    # log_probs = pad_sequence_to_length(
+                    #     log_probs, self.config.response_length, self.pad_token_id)
 
                 # Handle multiple samples per prompt
                 if self.config.n > 1 and do_sample:
@@ -341,33 +350,35 @@ class vLLMRollout(BaseRollout):
                 return DataProto(batch=batch)
 
             except Exception as e:
-                traceback.print_exc()
-                print("Restarting vLLM due to error: ", e)
-                print("Retrying...")
+                print(e)
+                print("报错了")
+                # traceback.print_exc()
+                # print("Restarting vLLM due to error: ", e)
+                # print("Retrying...")
 
-                # Clean up and restart engine
-                torch.cuda.empty_cache()
-                if hasattr(self.inference_engine, 'free_cache_engine'):
-                    self.inference_engine.free_cache_engine()
-                del self.inference_engine
+                # # Clean up and restart engine
+                # torch.cuda.empty_cache()
+                # if hasattr(self.inference_engine, 'free_cache_engine'):
+                #     self.inference_engine.free_cache_engine()
+                # del self.inference_engine
 
-                # Reinitialize engine with same parameters
-                self.inference_engine = LLM(
-                    self.actor_module,
-                    tokenizer=self.tokenizer,
-                    model_hf_config=self.model_hf_config,
-                    tensor_parallel_size=self.tensor_parallel_size,
-                    dtype=self.config.dtype,
-                    enforce_eager=self.config.enforce_eager,
-                    gpu_memory_utilization=self.config.gpu_memory_utilization,
-                    skip_tokenizer_init=False,
-                    max_model_len=self.config.prompt_length +
-                    self.config.response_length,
-                    load_format=self.config.load_format)
-                print("vLLM is ready to roll!")
+                # # Reinitialize engine with same parameters
+                # self.inference_engine = LLM(
+                #     self.actor_module,
+                #     tokenizer=self.tokenizer,
+                #     model_hf_config=self.model_hf_config,
+                #     tensor_parallel_size=self.tensor_parallel_size,
+                #     dtype=self.config.dtype,
+                #     enforce_eager=self.config.enforce_eager,
+                #     gpu_memory_utilization=self.config.gpu_memory_utilization,
+                #     skip_tokenizer_init=False,
+                #     max_model_len=self.config.prompt_length +
+                #     self.config.response_length,
+                #     load_format=self.config.load_format)
+                # print("vLLM is ready to roll!")
 
-                if attempt < max_retries - 1:
-                    continue
+                # if attempt < max_retries - 1:
+                #     continue
 
         raise RuntimeError(
             f"Failed to generate sequences after {max_retries} attempts")
