@@ -284,6 +284,7 @@ class vLLMRollout(BaseRollout):
 
                         # 截取响应部分的 token ids
                         resp_ids = token_ids[start_index:]
+                        resp_ids = resp_ids[:self.config.response_length]
                         output_token_ids.append(torch.tensor(resp_ids))
                 
                     
@@ -300,6 +301,8 @@ class vLLMRollout(BaseRollout):
                 if response.shape[1] < self.config.response_length:
                     response = pad_sequence_to_length(
                         response, self.config.response_length, self.pad_token_id)
+                if response.shape[1] > self.config.response_length:
+                    print("response.shape[1] > self.config.response_length 这是错误的")
                     # log_probs = pad_sequence_to_length(
                     #     log_probs, self.config.response_length, self.pad_token_id)
 
@@ -350,10 +353,10 @@ class vLLMRollout(BaseRollout):
                 return DataProto(batch=batch)
 
             except Exception as e:
-                # print("报错了")
-                # print("错误类型:", type(e).__name__)  # 输出错误类型
-                # print("错误信息:", str(e))  # 输出错误信息
-                # traceback.print_exc()  # 打印完整的错误堆栈信息
+                print("报错了")
+                print("错误类型:", type(e).__name__)  # 输出错误类型
+                print("错误信息:", str(e))  # 输出错误信息
+                traceback.print_exc()  # 打印完整的错误堆栈信息
                 import sys
                 sys.exit(0)
                 # traceback.print_exc()
