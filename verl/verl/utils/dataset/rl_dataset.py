@@ -140,6 +140,9 @@ class RLHFDataset(Dataset):
         position_ids = compute_position_id_with_mask(attention_mask)
 
         row_dict['input_ids'] = input_ids[0]
+        if input_ids[0].numel() == 0:
+            print(input_ids[0])
+            raise RuntimeError("这里报错了，input_ids[0]是空的")
         row_dict['attention_mask'] = attention_mask[0]
         row_dict['position_ids'] = position_ids[0]
 

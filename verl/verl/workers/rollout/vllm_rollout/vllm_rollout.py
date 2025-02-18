@@ -151,7 +151,7 @@ class vLLMRollout(BaseRollout):
 
 
     @torch.no_grad()
-    def generate_sequences(self, prompts: DataProto, max_retries: int = 1e9, **kwargs) -> DataProto:
+    def generate_sequences(self, prompts: DataProto, max_retries: int = 2, **kwargs) -> DataProto:
         """Generate sequences using vLLM engine with retry logic for failures.
 
         Args:
@@ -350,8 +350,12 @@ class vLLMRollout(BaseRollout):
                 return DataProto(batch=batch)
 
             except Exception as e:
-                print(e)
-                print("报错了")
+                # print("报错了")
+                # print("错误类型:", type(e).__name__)  # 输出错误类型
+                # print("错误信息:", str(e))  # 输出错误信息
+                # traceback.print_exc()  # 打印完整的错误堆栈信息
+                import sys
+                sys.exit(0)
                 # traceback.print_exc()
                 # print("Restarting vLLM due to error: ", e)
                 # print("Retrying...")
